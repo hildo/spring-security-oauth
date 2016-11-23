@@ -16,6 +16,8 @@
 
 package org.springframework.security.oauth2.client.filter;
 
+import org.springframework.beans.factory.annotation.Value;
+
 import java.io.IOException;
 
 import javax.servlet.FilterChain;
@@ -52,6 +54,8 @@ import org.springframework.util.Assert;
  */
 public class OAuth2ClientAuthenticationProcessingFilter extends AbstractAuthenticationProcessingFilter {
 
+        private static final String LOCATION_ID_TOKEN = "additional-idToken";
+        
 	public OAuth2RestOperations restTemplate;
 
 	private ResourceServerTokenServices tokenServices;
@@ -59,6 +63,11 @@ public class OAuth2ClientAuthenticationProcessingFilter extends AbstractAuthenti
 	private AuthenticationDetailsSource<HttpServletRequest, ?> authenticationDetailsSource = new OAuth2AuthenticationDetailsSource();
 
 	private ApplicationEventPublisher eventPublisher;
+        
+        @Value("${security.oauth2.client.tokenLocation:default}")
+        private String tokenLocation;
+        
+        private AccessTokenValueReader accessTokenValueReader;
 
 	/**
 	 * Reference to a CheckTokenServices that can validate an OAuth2AccessToken
@@ -93,6 +102,11 @@ public class OAuth2ClientAuthenticationProcessingFilter extends AbstractAuthenti
 	@Override
 	public void afterPropertiesSet() {
 		Assert.state(restTemplate != null, "Supply a rest-template");
+                if (LOCATION_ID_TOKEN.equals(tokenLocation)) {
+                    accessTokenValueReader = new IdTokenValueReader();
+                } else {
+                    accessTokenValueReader = new DefaultAccessTokenValueReader();
+                }
 		super.afterPropertiesSet();
 	}
 
@@ -108,10 +122,11 @@ public class OAuth2ClientAuthenticationProcessingFilter extends AbstractAuthenti
 			publish(new OAuth2AuthenticationFailureEvent(bad));
 			throw bad;			
 		}
+                String tokenValue = accessTokenValueReader.readValue(accessToken);
 		try {
-			OAuth2Authentication result = tokenServices.loadAuthentication(accessToken.getValue());
+			OAuth2Authentication result = tokenServices.loadAuthentication(tokenValue);
 			if (authenticationDetailsSource!=null) {
-				request.setAttribute(OAuth2AuthenticationDetails.ACCESS_TOKEN_VALUE, accessToken.getValue());
+				request.setAttribute(OAuth2AuthenticationDetails.ACCESS_TOKEN_VALUE, tokenValue);
 				request.setAttribute(OAuth2AuthenticationDetails.ACCESS_TOKEN_TYPE, accessToken.getTokenType());
 				result.setDetails(authenticationDetailsSource.buildDetails(request));
 			}
@@ -125,7 +140,7 @@ public class OAuth2ClientAuthenticationProcessingFilter extends AbstractAuthenti
 		}
 
 	}
-
+        
 	private void publish(ApplicationEvent event) {
 		if (eventPublisher!=null) {
 			eventPublisher.publishEvent(event);
@@ -163,4 +178,28 @@ public class OAuth2ClientAuthenticationProcessingFilter extends AbstractAuthenti
 		
 	}
 
+        private static abstract class AccessTokenValueReader {
+            
+            abstract String readValue(OAuth2AccessToken accessToken);
+            
+        }
+        
+        private static class DefaultAccessTokenValueReader extends AccessTokenValueReader {
+            
+            @Override
+            String readValue(OAuth2AccessToken accessToken) {
+                return accessToken.getValue();
+            }
+            
+        }
+        
+        private static class IdTokenValueReader extends AccessTokenValueReader {
+            
+            @Override
+            String readValue(OAuth2AccessToken accessToken) {
+                return (String) accessToken.getAdditionalInformation().get("id_token");
+            }
+            
+        }
+        
 }
